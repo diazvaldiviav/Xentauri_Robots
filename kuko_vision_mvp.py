@@ -30,7 +30,7 @@ class KukoVision:
     """Kuko robot vision system for object classification"""
 
     def __init__(self):
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-pro-vision')
         self.camera = None
 
     def init_camera(self):
