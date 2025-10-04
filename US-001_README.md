@@ -78,8 +78,9 @@ Jupyter Notebook for interactive testing with step-by-step execution:
 ### Gemini API Key
 The API key is loaded from `tokens.txt`:
 ```
-Gemini => AIzaSyDpPKiFsy0fz7bTga4U2EDd62qWRYpswK4
+Gemini => YOUR_API_KEY_HERE
 ```
+**Note:** Never commit `tokens.txt` to git. The file is already in `.gitignore`.
 
 ### Camera Settings
 - **Resolution:** 2592x1944 (5MP)
