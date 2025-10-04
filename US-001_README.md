@@ -76,11 +76,20 @@ Jupyter Notebook for interactive testing with step-by-step execution:
 ## 🔧 Configuration
 
 ### Gemini API Key
-The API key is loaded from `tokens.txt`:
+The application uses the `GEMINI_API_KEY` environment variable.
+
+**Set the environment variable before running:**
+```bash
+export GEMINI_API_KEY="your_api_key_here"
 ```
-Gemini => YOUR_API_KEY_HERE
+
+**For Jupyter Notebook:**
+```python
+import os
+os.environ['GEMINI_API_KEY'] = 'your_api_key_here'
 ```
-**Note:** Never commit `tokens.txt` to git. The file is already in `.gitignore`.
+
+**Note:** Never commit API keys to git. Keep them in environment variables or secure configuration files excluded by `.gitignore`.
 
 ### Camera Settings
 - **Resolution:** 2592x1944 (5MP)

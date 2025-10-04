@@ -13,20 +13,13 @@ import google.generativeai as genai
 import time
 from PIL import Image
 import json
-from pathlib import Path
+import os
 
-# Load Gemini API key from tokens.txt
-def load_gemini_api_key():
-    """Load Gemini API key from tokens.txt"""
-    tokens_file = Path(__file__).parent / "tokens.txt"
-    with open(tokens_file, 'r') as f:
-        for line in f:
-            if line.startswith('Gemini'):
-                return line.split('=>')[1].strip()
-    raise ValueError("Gemini API key not found in tokens.txt")
+# Configure Gemini using environment variable
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set. Please set it before running.")
 
-# Configure Gemini
-GEMINI_API_KEY = load_gemini_api_key()
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Camera configuration for 5MP
