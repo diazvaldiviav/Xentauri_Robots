@@ -1,0 +1,12 @@
+# Kuko Robot - Epic 1: AI Vision Dependencies
+# Python 3.11.7
+
+# Computer Vision
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Gemini AI
+google-generativeai>=0.3.0
+
+# Utilities
+python-dotenv>=1.0.0
