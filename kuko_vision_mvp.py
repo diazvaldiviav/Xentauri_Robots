@@ -97,6 +97,13 @@ class KukoVision:
         }
 
         If no objects found with confidence >70%, return empty objects array.
+
+        Important: Detect only objects in the floor or surface that be out of place.
+        Ignore:
+        -Clothing on hangers or shelves
+        -Clothing on people
+        -Furniture
+        -Walls decor
         """
 
         # Send to Gemini
