@@ -1,6 +1,12 @@
 # Kuko Robot - Epic 1: AI Vision & Voice Dependencies
 # Python 3.11.7
 
+# NumPy (compatible with tensorflow-cpu-aws 2.12.0 and scipy 1.10.1)
+numpy>=1.22,<1.24
+
+# Protobuf (compatible with tensorflow-cpu-aws 2.12.0)
+protobuf>=3.20.3,<5.0.0
+
 # Computer Vision
 opencv-python>=4.8.0
 Pillow>=10.0.0
@@ -12,6 +18,9 @@ google-generativeai>=0.3.0
 pvporcupine>=2.2.0          # Picovoice wake word detection
 pyaudio>=0.2.13             # Audio I/O
 SpeechRecognition>=3.10.0   # Speech-to-text (backup)
+
+# WebSocket (compatible with stream-analyser 0.3.8)
+websocket-client>=1.2.1
 
 # Robot Hardware
 # xgoedu (installed on robot, not via pip)
