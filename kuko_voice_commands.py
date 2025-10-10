@@ -17,9 +17,10 @@ import os
 import time
 import json
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import google.generativeai as genai
 import speech_recognition as sr
+from gtts import gTTS
 
 # Robot-specific imports (XGOEDU library)
 try:
@@ -57,6 +58,9 @@ class KukoVoiceCommands:
         # Command history
         self.command_history = []
 
+        # Track detected language for TTS
+        self.last_detected_language = 'es'  # Default to Spanish
+
         print("✓ Kuko Voice Commands ready")
 
     def wait_for_wake_word(self) -> bool:
@@ -80,7 +84,7 @@ class KukoVoiceCommands:
         input()
         return True
 
-    def listen_and_transcribe(self, duration: int = 5) -> Optional[str]:
+    def listen_and_transcribe(self, duration: int = 5) -> Optional[Tuple[str, str]]:
         """
         Record and transcribe voice command using Google Speech Recognition.
 
@@ -91,11 +95,12 @@ class KukoVoiceCommands:
             duration: Recording duration in seconds
 
         Returns:
-            Transcribed text in Spanish or English
+            Tuple of (transcribed_text, language_code) or None if failed
+            language_code: 'es' for Spanish, 'en' for English
         """
         if not self.robot:
             print("⚠️  Robot not available. Using test command.")
-            return "Kuko ve a la habitación"
+            return ("Kuko ve a la habitación", 'es')
 
         try:
             print(f"\n🎤 LISTENING FOR {duration} SECONDS...")
@@ -106,7 +111,6 @@ class KukoVoiceCommands:
             filename = "voice_command"
             self.robot.xgoAudioRecord(filename=filename, seconds=duration)
             audio_path = f"/home/pi/xgoMusic/{filename}.wav"
-            record_time = time.time() - start_time
 
             # Step 2: Transcribe with Google Speech Recognition
             recognizer = sr.Recognizer()
@@ -118,17 +122,23 @@ class KukoVoiceCommands:
                 try:
                     text = recognizer.recognize_google(audio_data, language='es-ES')
                     detected_lang = "Spanish"
+                    lang_code = 'es'
                 except sr.UnknownValueError:
                     try:
                         text = recognizer.recognize_google(audio_data, language='en-US')
                         detected_lang = "English"
+                        lang_code = 'en'
                     except sr.UnknownValueError:
                         print("❌ Could not understand audio")
                         return None
 
             elapsed = time.time() - start_time
             print(f"✓ Transcribed ({elapsed:.2f}s, {detected_lang}): '{text}'")
-            return text
+
+            # Store detected language for TTS
+            self.last_detected_language = lang_code
+
+            return (text, lang_code)
 
         except sr.RequestError as e:
             print(f"❌ Google Speech API error: {e}")
@@ -217,35 +227,52 @@ Respond ONLY with valid JSON:
                 "error": str(e)
             }
 
-    def speak_response(self, text: str) -> bool:
+    def speak_response(self, text: str, language: str = None) -> bool:
         """
-        Speak text using robot TTS.
+        Speak text using Google TTS with proper accent.
 
-        Note: XGOEDU SpeechSynthesis uses Baidu TTS (Chinese service).
-        Text is in Spanish but voice may have Chinese accent.
+        Uses gTTS (Google Text-to-Speech) to generate audio with native accent:
+        - Spanish commands → Spanish voice (es)
+        - English commands → English voice (en)
 
         Args:
-            text: Spanish text to speak
+            text: Text to speak (Spanish or English)
+            language: Language code ('es' or 'en'). If None, uses last detected language.
 
         Returns:
             True if successful
         """
         if not self.robot:
-            print(f"\n🔊 [Simulated]: '{text}'")
+            lang = language or self.last_detected_language
+            lang_name = "Spanish" if lang == 'es' else "English"
+            print(f"\n🔊 [Simulated TTS, {lang_name}]: '{text}'")
             return True
 
         try:
-            print(f"\n🔊 Speaking: '{text}'")
+            # Use detected language or provided language
+            lang = language or self.last_detected_language
+            lang_name = "Spanish" if lang == 'es' else "English"
+
+            print(f"\n🔊 Speaking ({lang_name} accent): '{text}'")
 
             start_time = time.time()
-            self.robot.SpeechSynthesis(text)
-            elapsed = time.time() - start_time
 
-            print(f"✓ Spoken ({elapsed:.2f}s)")
+            # Generate TTS audio with Google TTS
+            tts = gTTS(text=text, lang=lang, slow=False)
+            audio_path = "/home/pi/xgoMusic/tts_response.mp3"
+            tts.save(audio_path)
+
+            # Play audio using robot speaker
+            # Convert mp3 to wav if needed, or use mpg123/mpg321 to play mp3
+            os.system(f"mpg123 -q {audio_path}")
+
+            elapsed = time.time() - start_time
+            print(f"✓ Spoken ({elapsed:.2f}s, {lang_name} accent)")
             return True
 
         except Exception as e:
             print(f"❌ TTS failed: {e}")
+            print("⚠️  Install mpg123: sudo apt-get install mpg123")
             return False
 
     def process_command(self) -> Dict:
@@ -267,17 +294,23 @@ Respond ONLY with valid JSON:
             return {"error": "Cancelled", "total_time": 0}
 
         # Step 2: Listen and transcribe
-        command_text = self.listen_and_transcribe(duration=5)
-        if not command_text:
+        result = self.listen_and_transcribe(duration=5)
+        if not result:
             print("\n❌ No command detected. Try again.")
             return {"error": "No speech", "total_time": time.time() - pipeline_start}
 
+        command_text, detected_language = result
+
         # Step 3: Parse with Gemini
         parsed = self.parse_command_with_gemini(command_text)
+        parsed['detected_language'] = detected_language
 
-        # Step 4: Speak confirmation (only if confident)
+        # Step 4: Speak confirmation with appropriate accent (only if confident)
         if parsed.get('confidence', 0) > 50 and 'natural_response' in parsed:
-            self.speak_response(parsed['natural_response'])
+            # Always use Spanish for responses (as per Gemini prompt)
+            # But use detected language accent if command was in English
+            response_lang = 'es'  # Responses always in Spanish
+            self.speak_response(parsed['natural_response'], language=response_lang)
         else:
             print("\n⚠️  Low confidence - no voice confirmation")
 

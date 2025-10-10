@@ -18,6 +18,7 @@ google-generativeai>=0.3.0
 pvporcupine>=2.2.0          # Picovoice wake word detection (optional)
 pyaudio>=0.2.13             # Audio I/O
 SpeechRecognition>=3.10.0   # Google Speech API (Spanish/English)
+gTTS>=2.3.0                 # Google Text-to-Speech (native accents)
 
 # WebSocket (compatible with stream-analyser 0.3.8)
 websocket-client>=1.2.1
