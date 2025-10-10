@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 from typing import Dict, Optional
 import google.generativeai as genai
+import speech_recognition as sr
 
 # Robot-specific imports (XGOEDU library)
 try:
@@ -81,16 +82,16 @@ class KukoVoiceCommands:
 
     def listen_and_transcribe(self, duration: int = 5) -> Optional[str]:
         """
-        Record and transcribe voice command.
+        Record and transcribe voice command using Google Speech Recognition.
 
-        Note: XGOEDU SpeechRecognition uses Baidu API which may transcribe
-        in Chinese by default. Gemini will interpret the intent regardless.
+        Uses XGOEDU to record audio, then Google Speech API to transcribe.
+        Supports Spanish and English recognition.
 
         Args:
             duration: Recording duration in seconds
 
         Returns:
-            Transcribed text (may be in Chinese/Spanish/English)
+            Transcribed text in Spanish or English
         """
         if not self.robot:
             print("⚠️  Robot not available. Using test command.")
@@ -100,19 +101,39 @@ class KukoVoiceCommands:
             print(f"\n🎤 LISTENING FOR {duration} SECONDS...")
             print("🗣️  Speak now!")
 
+            # Step 1: Record audio using XGOEDU
             start_time = time.time()
-            text = self.robot.SpeechRecognition(seconds=duration)
+            filename = "voice_command"
+            self.robot.xgoAudioRecord(filename=filename, seconds=duration)
+            audio_path = f"/home/pi/xgoMusic/{filename}.wav"
+            record_time = time.time() - start_time
+
+            # Step 2: Transcribe with Google Speech Recognition
+            recognizer = sr.Recognizer()
+
+            with sr.AudioFile(audio_path) as source:
+                audio_data = recognizer.record(source)
+
+                # Try Spanish first, then English as fallback
+                try:
+                    text = recognizer.recognize_google(audio_data, language='es-ES')
+                    detected_lang = "Spanish"
+                except sr.UnknownValueError:
+                    try:
+                        text = recognizer.recognize_google(audio_data, language='en-US')
+                        detected_lang = "English"
+                    except sr.UnknownValueError:
+                        print("❌ Could not understand audio")
+                        return None
+
             elapsed = time.time() - start_time
+            print(f"✓ Transcribed ({elapsed:.2f}s, {detected_lang}): '{text}'")
+            return text
 
-            if text:
-                print(f"✓ Recorded ({elapsed:.2f}s): '{text}'")
-                if any('\u4e00' <= char <= '\u9fff' for char in text):
-                    print("⚠️  Note: Baidu API transcribed in Chinese. Gemini will interpret intent.")
-                return text
-            else:
-                print("❌ No speech detected")
-                return None
-
+        except sr.RequestError as e:
+            print(f"❌ Google Speech API error: {e}")
+            print("⚠️  Check internet connection")
+            return None
         except Exception as e:
             print(f"❌ Transcription failed: {e}")
             return None
@@ -134,15 +155,14 @@ class KukoVoiceCommands:
 
 The user said: "{command_text}"
 
-This may be in Spanish, English, or Chinese (if speech recognition failed). 
-Parse the INTENT and extract:
+This is in Spanish or English. Parse the INTENT and extract:
 
 1. **action**: Main verb (go/ve/camina, pick_up/recoge/levanta, inspect/revisa, clean/limpia)
 2. **location**: Target room (bedroom/habitación, kitchen/cocina, living_room/sala) or null
-3. **object**: Target object (toys/juguetes, trash/basura, clothing/ropa) or null  
+3. **object**: Target object (toys/juguetes, trash/basura, clothing/ropa) or null
 4. **intent**: High-level (navigate, collect_object, inspect_room, clean)
 5. **confidence**: 0-100 score
-6. **natural_response**: Brief Spanish confirmation (ALWAYS in Spanish, even if command was English/Chinese)
+6. **natural_response**: Brief Spanish confirmation (ALWAYS respond in Spanish, even if command was English)
 
 Handle variations:
 - "go"="ve"="camina"="muévete"="walk"="move"
@@ -201,9 +221,8 @@ Respond ONLY with valid JSON:
         """
         Speak text using robot TTS.
 
-        Note: XGOEDU SpeechSynthesis uses Baidu TTS which defaults to Chinese voice.
-        The text is in Spanish but may sound Chinese-accented.
-        Consider using alternative TTS library for proper Spanish voice.
+        Note: XGOEDU SpeechSynthesis uses Baidu TTS (Chinese service).
+        Text is in Spanish but voice may have Chinese accent.
 
         Args:
             text: Spanish text to speak
@@ -217,7 +236,6 @@ Respond ONLY with valid JSON:
 
         try:
             print(f"\n🔊 Speaking: '{text}'")
-            print("⚠️  Note: Baidu TTS may use Chinese voice. Text is Spanish.")
 
             start_time = time.time()
             self.robot.SpeechSynthesis(text)
