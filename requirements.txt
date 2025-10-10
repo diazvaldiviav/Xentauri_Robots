@@ -1,4 +1,4 @@
-# Kuko Robot - Epic 1: AI Vision Dependencies
+# Kuko Robot - Epic 1: AI Vision & Voice Dependencies
 # Python 3.11.7
 
 # Computer Vision
@@ -7,6 +7,14 @@ Pillow>=10.0.0
 
 # Gemini AI
 google-generativeai>=0.3.0
+
+# Voice & Audio (US-002)
+pvporcupine>=2.2.0          # Picovoice wake word detection
+pyaudio>=0.2.13             # Audio I/O
+SpeechRecognition>=3.10.0   # Speech-to-text (backup)
+
+# Robot Hardware
+# xgoedu (installed on robot, not via pip)
 
 # Utilities
 python-dotenv>=1.0.0
