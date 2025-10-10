@@ -77,7 +77,7 @@ class KukoVoiceCommands:
                 raise ValueError("GEMINI_API_KEY not found in environment or tokens.txt")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-2.0-flash')
 
         # Initialize robot hardware if available
         self.robot = None
