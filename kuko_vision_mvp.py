@@ -30,9 +30,11 @@ if not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Camera configuration for 5MP
-CAMERA_WIDTH = 2592   # 5MP resolution (2592x1944)
-CAMERA_HEIGHT = 1944
+# Camera configuration
+# Note: 5MP (2592x1944) causes V4L2 timeout on Raspberry Pi
+# Using Full HD (1920x1080) - still excellent quality for AI vision
+CAMERA_WIDTH = 1920   # Full HD width
+CAMERA_HEIGHT = 1080  # Full HD height
 
 class KukoVision:
     """Kuko robot vision system for object classification"""
@@ -144,9 +146,9 @@ class KukoVision:
         if self.use_robot:
             self.position_for_floor_scan(pitch_angle=15, height=90)  # FIXED: +15° looks DOWN (robot-specific)
 
-        # For high resolution (5MP), use default backend (V4L2 times out)
-        # For low resolution (640x480), V4L2 works fine
-        print("Opening camera with default backend (V4L2 times out at 5MP)...")
+        # Use default backend (V4L2 on Raspberry Pi)
+        # Resolution set to Full HD (1920x1080) to avoid V4L2 timeout
+        print("Opening camera (Full HD resolution to avoid timeout)...")
         self.camera = cv2.VideoCapture(0)
 
         # Check if camera opened successfully
@@ -165,10 +167,9 @@ class KukoVision:
         print(f"Camera initialized: {actual_width}x{actual_height}")
 
         # Warm up camera (read and discard first frames)
-        # Default backend is more stable than V4L2 at high resolutions
         ret = False
         frame = None
-        for i in range(3):  # 3 attempts should be enough with default backend
+        for i in range(3):  # 3 attempts at Full HD
             ret, frame = self.camera.read()
             if ret and frame is not None:
                 # Validate frame shape
@@ -177,16 +178,31 @@ class KukoVision:
                     break
                 else:
                     print(f"⚠️  Attempt {i+1}: Invalid frame shape {frame.shape}, retrying...")
-            time.sleep(0.5)  # Longer delay for 5MP frame capture
+            time.sleep(0.3)
+
+        # If Full HD fails, try falling back to 720p
+        if not ret or frame is None or len(frame.shape) != 3:
+            print("⚠️  Full HD failed, trying 720p resolution...")
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+            for i in range(3):
+                ret, frame = self.camera.read()
+                if ret and frame is not None and len(frame.shape) == 3:
+                    actual_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    print(f"✓ Camera fallback successful: {actual_width}x{actual_height}")
+                    break
+                time.sleep(0.3)
 
         if not ret or frame is None:
-            raise RuntimeError("Camera opened but cannot read frames. Check camera hardware.")
+            raise RuntimeError("Camera opened but cannot read frames even at 720p. Check camera hardware.")
 
         if len(frame.shape) != 3 or frame.shape[2] != 3:
             raise RuntimeError(f"Camera producing invalid frame shape: {frame.shape}. Expected (height, width, 3).")
 
     def capture_photo(self, save_path="captured_image.jpg"):
-        """Capture a photo from the 5MP camera"""
+        """Capture a photo from the camera (Full HD or 720p depending on hardware)"""
         if not self.camera or not self.camera.isOpened():
             self.init_camera()
 
@@ -700,7 +716,7 @@ def main():
 
     try:
         # Step 1: Initialize camera
-        print("\n[1] Initializing 5MP camera...")
+        print("\n[1] Initializing camera...")
         kuko.init_camera()
 
         # Step 2: Capture photo
@@ -745,7 +761,7 @@ def main():
         print("ACCEPTANCE CRITERIA VALIDATION")
         print("=" * 60)
         criteria = {
-            "✓ 5MP camera capture": True,
+            "✓ HD camera capture": True,
             "✓ Gemini AI classification": True,
             "✓ Categories (toy/trash/clothing/other)": all(
                 obj.get('category') in ['toy', 'trash', 'clothing', 'other']
@@ -786,7 +802,7 @@ def test_us003():
 
     try:
         # Step 1: Initialize camera
-        print("\n[1] Initializing 5MP camera...")
+        print("\n[1] Initializing camera...")
         kuko.init_camera()
 
         # Step 2: Capture photo
