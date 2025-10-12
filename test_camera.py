@@ -7,6 +7,7 @@ Tests camera availability and capture functionality
 import cv2
 import os
 import sys
+import time
 
 print("="*60)
 print("Kuko Camera Diagnostics")
@@ -17,7 +18,13 @@ print(f"\n[1] OpenCV Version: {cv2.__version__}")
 
 # Test 2: Try to open camera at index 0
 print("\n[2] Testing camera at index 0...")
-camera = cv2.VideoCapture(0)
+
+# Try V4L2 backend first (better for Raspberry Pi)
+camera = cv2.VideoCapture(0, cv2.CAP_V4L2)
+
+if not camera.isOpened():
+    print("⚠️  Failed with V4L2 backend, trying default...")
+    camera = cv2.VideoCapture(0)
 
 if not camera.isOpened():
     print("❌ FAILED: Cannot open camera at index 0")
@@ -29,6 +36,9 @@ if not camera.isOpened():
 
 print("✓ Camera opened successfully")
 
+# Set MJPEG format (better compatibility)
+camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
+
 # Test 3: Check camera properties
 width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -38,11 +48,24 @@ print(f"\n[3] Camera properties:")
 print(f"  Resolution: {width}x{height}")
 print(f"  FPS: {fps}")
 
-# Test 4: Try to capture a frame
+# Test 4: Try to capture frames with validation
 print("\n[4] Testing frame capture...")
-ret, frame = camera.read()
 
-if not ret:
+# Warm up camera (read multiple frames)
+ret = False
+frame = None
+for i in range(5):
+    ret, frame = camera.read()
+    if ret and frame is not None:
+        # Validate frame shape
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
+            print(f"✓ Frame captured on attempt {i+1}: {frame.shape}")
+            break
+        else:
+            print(f"⚠️  Attempt {i+1}: Invalid frame shape {frame.shape}, retrying...")
+    time.sleep(0.2)
+
+if not ret or frame is None:
     print("❌ FAILED: Camera opened but cannot capture frames")
     print("\nTroubleshooting:")
     print("  - Camera might be in use by another application")
@@ -50,7 +73,19 @@ if not ret:
     camera.release()
     sys.exit(1)
 
-print(f"✓ Frame captured: {frame.shape}")
+# Validate frame shape
+if len(frame.shape) != 3 or frame.shape[2] != 3:
+    print(f"❌ FAILED: Invalid frame shape {frame.shape}")
+    print(f"\nExpected: (height, width, 3) e.g. (480, 640, 3)")
+    print(f"Got: {frame.shape}")
+    print("\nTroubleshooting:")
+    print("  - Camera driver might need reconfiguration")
+    print("  - Try: sudo modprobe bcm2835-v4l2  (Raspberry Pi)")
+    print("  - Check: ls -l /dev/video*")
+    camera.release()
+    sys.exit(1)
+
+print(f"✓ Frame shape validated: {frame.shape}")
 
 # Test 5: Try to save image
 test_path = os.path.abspath("camera_diagnostic_test.jpg")

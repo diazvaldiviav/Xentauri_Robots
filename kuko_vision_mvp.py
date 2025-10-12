@@ -139,31 +139,48 @@ class KukoVision:
         if self.use_robot:
             self.position_for_floor_scan(pitch_angle=-15, height=90)
 
-        self.camera = cv2.VideoCapture(0)
+        # Try to open camera with proper backend for Raspberry Pi
+        # CAP_V4L2 works better with Raspberry Pi Camera Module
+        self.camera = cv2.VideoCapture(0, cv2.CAP_V4L2)
 
         # Check if camera opened successfully
         if not self.camera.isOpened():
-            raise RuntimeError("Failed to open camera at index 0. Check camera connection and permissions.")
+            print("⚠️  Failed with V4L2 backend, trying default backend...")
+            self.camera = cv2.VideoCapture(0)
+
+            if not self.camera.isOpened():
+                raise RuntimeError("Failed to open camera at index 0. Check camera connection and permissions.")
+
+        # Set camera format to MJPEG (better compatibility with Raspberry Pi)
+        self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
 
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 
         # Verify actual resolution
-        actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        print(f"Camera initialized: {int(actual_width)}x{int(actual_height)}")
+        actual_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"Camera initialized: {actual_width}x{actual_height}")
 
         # Warm up camera (read and discard first frames)
         ret = False
         frame = None
-        for _ in range(3):
+        for i in range(5):  # Increased to 5 attempts for Raspberry Pi
             ret, frame = self.camera.read()
-            if ret:
-                break
-            time.sleep(0.1)
+            if ret and frame is not None:
+                # Validate frame shape
+                if len(frame.shape) == 3 and frame.shape[2] == 3:
+                    print(f"✓ Camera warm-up successful: frame shape {frame.shape}")
+                    break
+                else:
+                    print(f"⚠️  Attempt {i+1}: Invalid frame shape {frame.shape}, retrying...")
+            time.sleep(0.2)
 
-        if not ret:
+        if not ret or frame is None:
             raise RuntimeError("Camera opened but cannot read frames. Check camera hardware.")
+
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            raise RuntimeError(f"Camera producing invalid frame shape: {frame.shape}. Expected (height, width, 3).")
 
     def capture_photo(self, save_path="captured_image.jpg"):
         """Capture a photo from the 5MP camera"""
