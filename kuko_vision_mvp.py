@@ -58,7 +58,7 @@ class KukoVision:
             use_robot: If True, initializes XGO robot for body positioning
                       If False, only uses camera (for testing/simulation)
         """
-        self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        self.model = genai.GenerativeModel('gemini-2.5-pro')
         self.camera = None
         self.robot = None
         self.use_robot = use_robot and ROBOT_AVAILABLE
@@ -212,8 +212,48 @@ class KukoVision:
         if len(frame.shape) != 3 or frame.shape[2] != 3:
             raise RuntimeError(f"Camera producing invalid frame shape: {frame.shape}. Expected (height, width, 3).")
 
+    def cleanup_old_images(self, pattern_prefix=""):
+        """
+        Delete old capture images to avoid confusion in subsequent rounds
+
+        Args:
+            pattern_prefix: Image filename prefix to match (e.g., "kuko_capture", "scan_")
+                          If empty, cleans common capture patterns
+        """
+        import glob
+
+        # Common image patterns to clean
+        patterns = [
+            "kuko_capture*.jpg",
+            "scan_*.jpg",
+            "floor_check*.jpg",
+            "us003_test_capture*.jpg",
+            "debug_bbox*.jpg",
+            "*_optimized.jpg"
+        ]
+
+        if pattern_prefix:
+            patterns = [f"{pattern_prefix}*.jpg"]
+
+        cleaned_count = 0
+        for pattern in patterns:
+            for file_path in glob.glob(pattern):
+                try:
+                    os.remove(file_path)
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"⚠️  Could not delete {file_path}: {e}")
+
+        if cleaned_count > 0:
+            print(f"🧹 Cleaned up {cleaned_count} old image(s)")
+
+        return cleaned_count
+
     def capture_photo(self, save_path="captured_image.jpg"):
         """Capture a photo from the camera (Full HD or 720p depending on hardware)"""
+        # Clean up old images first to avoid confusion
+        self.cleanup_old_images()
+
         if not self.camera or not self.camera.isOpened():
             self.init_camera()
 
@@ -586,14 +626,20 @@ class KukoVision:
         distance = ((center1_x - center2_x)**2 + (center1_y - center2_y)**2)**0.5
         return distance
 
-    def filter_duplicate_objects(self, objects, iou_threshold=0.5, proximity_threshold=150):
+    def filter_duplicate_objects(self, objects, iou_threshold=0.3, proximity_threshold=120):
         """
         Filter duplicate object detections based on bounding box overlap and proximity
 
+        Enhanced duplicate detection:
+        - IoU overlap check (threshold: 0.3)
+        - Spatial proximity check (threshold: 120px)
+        - Description similarity (2+ shared keywords OR same category if very close)
+        - Category-based proximity (same category + close = likely duplicate)
+
         Args:
             objects: List of detected objects with 'bbox' and 'confidence'
-            iou_threshold: IoU threshold for considering duplicates (default: 0.5)
-            proximity_threshold: Max distance between centers (pixels) to check for duplicates
+            iou_threshold: IoU threshold for considering duplicates (default: 0.3 - more aggressive)
+            proximity_threshold: Max distance between centers (default: 120px - more aggressive)
 
         Returns:
             List of filtered objects (keeps highest confidence)
@@ -620,13 +666,23 @@ class KukoVision:
                 iou = self.calculate_bbox_iou(obj['bbox'], existing['bbox'])
                 if iou > iou_threshold:
                     is_duplicate = True
-                    print(f"  Filtered duplicate: {obj.get('description')} (IoU: {iou:.2f} with {existing.get('description')})")
+                    print(f"  Filtered duplicate (IoU): {obj.get('description')} (IoU: {iou:.2f} with {existing.get('description')})")
                     break
 
-                # Check spatial proximity (for objects that are close but low IoU)
+                # Check spatial proximity
                 center_distance = self.calculate_bbox_center_distance(obj['bbox'], existing['bbox'])
+
                 if center_distance < proximity_threshold:
-                    # If centers are very close, check if descriptions are similar
+                    obj_category = obj.get('category', '').lower()
+                    exist_category = existing.get('category', '').lower()
+
+                    # Same category + close proximity = likely duplicate
+                    if obj_category == exist_category and obj_category in ['toy', 'trash', 'clothing']:
+                        is_duplicate = True
+                        print(f"  Filtered duplicate (proximity+category): {obj.get('description')} (distance: {center_distance:.0f}px, same category '{obj_category}' as {existing.get('description')})")
+                        break
+
+                    # Check description similarity
                     obj_desc = obj.get('description', '').lower()
                     exist_desc = existing.get('description', '').lower()
 
@@ -635,9 +691,12 @@ class KukoVision:
                     exist_words = set(exist_desc.split())
                     shared_words = obj_words.intersection(exist_words)
 
-                    if len(shared_words) >= 2:  # At least 2 common words
+                    # Lower threshold if same category (1+ shared word)
+                    min_shared = 1 if obj_category == exist_category else 2
+
+                    if len(shared_words) >= min_shared:
                         is_duplicate = True
-                        print(f"  Filtered close proximity: {obj.get('description')} (distance: {center_distance:.0f}px, similar to {existing.get('description')})")
+                        print(f"  Filtered duplicate (proximity+description): {obj.get('description')} (distance: {center_distance:.0f}px, {len(shared_words)} shared words with {existing.get('description')})")
                         break
 
             if not is_duplicate:
@@ -893,8 +952,11 @@ class KukoVision:
         # Step 2: Filter duplicates
         print("\n[2] Filtering duplicate detections...")
         original_count = len(objects)
-        # Lower threshold = more aggressive filtering (0.3 instead of 0.5)
-        objects = self.filter_duplicate_objects(objects, iou_threshold=0.3)
+        # Enhanced duplicate filtering:
+        # - IoU: 0.3 (aggressive overlap detection)
+        # - Proximity: 120px (same category + close = duplicate)
+        # - Category matching (toy+toy within 120px = duplicate)
+        objects = self.filter_duplicate_objects(objects, iou_threshold=0.3, proximity_threshold=120)
         duplicates_removed = original_count - len(objects)
         if duplicates_removed > 0:
             print(f"  Removed {duplicates_removed} duplicates")
