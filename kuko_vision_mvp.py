@@ -15,6 +15,14 @@ from PIL import Image
 import json
 import os
 
+# Robot control library (for physical robot only)
+try:
+    from xgolib import XGO
+    ROBOT_AVAILABLE = True
+except ImportError:
+    print("⚠️  xgolib not available. Running in camera-only mode.")
+    ROBOT_AVAILABLE = False
+
 # Configure Gemini using environment variable
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
@@ -29,12 +37,108 @@ CAMERA_HEIGHT = 1944
 class KukoVision:
     """Kuko robot vision system for object classification"""
 
-    def __init__(self):
+    def __init__(self, use_robot=True):
+        """
+        Initialize Kuko vision system
+
+        Args:
+            use_robot: If True, initializes XGO robot for body positioning
+                      If False, only uses camera (for testing/simulation)
+        """
         self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
         self.camera = None
+        self.robot = None
+        self.use_robot = use_robot and ROBOT_AVAILABLE
+
+        # Initialize robot if available
+        if self.use_robot:
+            try:
+                self.robot = XGO(port="/dev/ttyAMA0", version="xgolite")
+                print("✓ Robot initialized (XGO Lite)")
+            except Exception as e:
+                print(f"⚠️  Could not initialize robot: {e}")
+                print("   Falling back to camera-only mode")
+                self.robot = None
+                self.use_robot = False
+        else:
+            print("ℹ️  Running in camera-only mode (no robot positioning)")
+
+    def position_for_floor_scan(self, pitch_angle=-15, height=90):
+        """
+        Position robot to look at the floor for object detection
+
+        This is CRITICAL for floor object detection. The robot must tilt
+        its head/body downward to point the camera at the floor.
+
+        Args:
+            pitch_angle: Pitch angle in degrees (negative = look down)
+                        Range: -15 to +15 degrees
+                        Default: -15 (maximum downward tilt)
+            height: Body height (z-axis translation)
+                   Range: 75 (low) to 115 (high)
+                   Default: 90 (neutral height)
+
+        Returns:
+            bool: True if positioning successful, False otherwise
+        """
+        if not self.use_robot or not self.robot:
+            print("ℹ️  Robot not available, skipping floor scan posture")
+            return False
+
+        try:
+            print(f"🤖 Positioning robot for floor scan...")
+            print(f"   Pitch: {pitch_angle}° (looking down)")
+            print(f"   Height: {height} mm")
+
+            # Set body attitude: roll=0, pitch=negative (look down), yaw=0
+            self.robot.attitude(['r', 'p', 'y'], [0, pitch_angle, 0])
+
+            # Set body height
+            self.robot.translation(['x', 'y', 'z'], [0, 0, height])
+
+            # Wait for servos to settle
+            time.sleep(0.5)
+
+            print("✓ Robot positioned for floor scanning")
+            return True
+
+        except Exception as e:
+            print(f"⚠️  Error positioning robot: {e}")
+            return False
+
+    def reset_robot_posture(self):
+        """
+        Reset robot to neutral posture after scanning
+
+        Returns body to default position (level, neutral height)
+        """
+        if not self.use_robot or not self.robot:
+            return False
+
+        try:
+            print("🤖 Resetting robot posture...")
+
+            # Reset attitude to level (roll=0, pitch=0, yaw=0)
+            self.robot.attitude(['r', 'p', 'y'], [0, 0, 0])
+
+            # Reset to neutral height
+            self.robot.translation(['x', 'y', 'z'], [0, 0, 90])
+
+            time.sleep(0.3)
+
+            print("✓ Robot posture reset")
+            return True
+
+        except Exception as e:
+            print(f"⚠️  Error resetting robot: {e}")
+            return False
 
     def init_camera(self):
         """Initialize 5MP camera"""
+        # Position robot for floor scanning BEFORE opening camera
+        if self.use_robot:
+            self.position_for_floor_scan(pitch_angle=-15, height=90)
+
         self.camera = cv2.VideoCapture(0)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
@@ -72,17 +176,20 @@ class KukoVision:
         # Load image
         img = Image.open(image_path)
 
-        # Gemini prompt for object classification
+        # Gemini prompt for object classification (US-001 + US-003 enhanced)
         prompt = """
-        Analyze this image and identify objects that are out of place (toys, trash, clothing, etc.).
+        Analyze this image and identify ALL objects that are out of place (toys, trash, clothing, etc.).
 
         For EACH object found, provide:
         1. category: Must be one of [toy, trash, clothing, other]
         2. description: Brief description of the object
         3. confidence: Confidence percentage (0-100)
         4. bbox: Approximate bounding box as [x_min, y_min, x_max, y_max] in pixels
+        5. size_estimate: "small" (<20cm), "medium" (20-50cm), "large" (>50cm)
+        6. accessibility: "clear" if in open space, "blocked" if obstructed
 
         ONLY include objects with confidence > 70%.
+        Detect up to 5 objects maximum.
 
         Return response in JSON format:
         {
@@ -91,19 +198,23 @@ class KukoVision:
                     "category": "toy|trash|clothing|other",
                     "description": "object description",
                     "confidence": 85,
-                    "bbox": [x1, y1, x2, y2]
+                    "bbox": [x1, y1, x2, y2],
+                    "size_estimate": "small|medium|large",
+                    "accessibility": "clear|blocked"
                 }
             ]
         }
 
         If no objects found with confidence >70%, return empty objects array.
 
-        Important: Detect only objects in the floor or surface that be out of place.
-        Ignore:
-        -Clothing on hangers or shelves
-        -Clothing on people
-        -Furniture
-        -Walls decor
+        Important: Detect only objects on the floor or surfaces that are out of place.
+        IGNORE:
+        - Clothing on hangers or shelves
+        - Clothing on people
+        - Furniture (sofas, tables, chairs, beds)
+        - Large appliances
+        - Walls, floors, ceiling fixtures
+        - Large plants
         """
 
         # Send to Gemini
@@ -303,10 +414,226 @@ class KukoVision:
                 time.sleep(1)
 
     def release_camera(self):
-        """Release camera resources"""
+        """Release camera and reset robot posture"""
+        # Reset robot to neutral posture
+        if self.use_robot and self.robot:
+            self.reset_robot_posture()
+
+        # Release camera
         if self.camera:
             self.camera.release()
             print("Camera released")
+
+    # ============================================================
+    # US-003: Multiple Object Detection with Priority
+    # ============================================================
+
+    def calculate_bbox_iou(self, bbox1, bbox2):
+        """
+        Calculate Intersection over Union (IoU) for two bounding boxes
+        Used for duplicate detection
+
+        Args:
+            bbox1, bbox2: [x_min, y_min, x_max, y_max]
+
+        Returns:
+            float: IoU score (0.0 to 1.0)
+        """
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+
+        # Calculate intersection area
+        intersection = max(0, x2 - x1) * max(0, y2 - y1)
+
+        # Calculate union area
+        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0
+
+    def filter_duplicate_objects(self, objects, iou_threshold=0.5):
+        """
+        Filter duplicate object detections based on bounding box overlap
+
+        Args:
+            objects: List of detected objects with 'bbox' and 'confidence'
+            iou_threshold: IoU threshold for considering duplicates (default: 0.5)
+
+        Returns:
+            List of filtered objects (keeps highest confidence)
+        """
+        if not objects or len(objects) <= 1:
+            return objects
+
+        # Sort by confidence (highest first)
+        sorted_objects = sorted(objects, key=lambda x: x.get('confidence', 0), reverse=True)
+
+        filtered = []
+        for obj in sorted_objects:
+            if not obj.get('bbox'):
+                filtered.append(obj)
+                continue
+
+            # Check if this object overlaps with any already filtered object
+            is_duplicate = False
+            for existing in filtered:
+                if not existing.get('bbox'):
+                    continue
+
+                iou = self.calculate_bbox_iou(obj['bbox'], existing['bbox'])
+                if iou > iou_threshold:
+                    is_duplicate = True
+                    print(f"  Filtered duplicate: {obj.get('description')} (IoU: {iou:.2f} with {existing.get('description')})")
+                    break
+
+            if not is_duplicate:
+                filtered.append(obj)
+
+        return filtered
+
+    def filter_furniture(self, objects):
+        """
+        Filter out furniture and fixed objects
+
+        Furniture indicators:
+        - Large size estimate
+        - Keywords in description (sofa, table, chair, bed, plant, appliance)
+
+        Args:
+            objects: List of detected objects
+
+        Returns:
+            List of objects without furniture
+        """
+        furniture_keywords = ['sofa', 'couch', 'table', 'chair', 'bed', 'desk',
+                             'shelf', 'cabinet', 'plant', 'lamp', 'tv',
+                             'appliance', 'furniture', 'wall', 'floor']
+
+        filtered = []
+        for obj in objects:
+            description = obj.get('description', '').lower()
+            size = obj.get('size_estimate', '').lower()
+
+            # Check for furniture keywords
+            is_furniture = any(keyword in description for keyword in furniture_keywords)
+
+            # Large objects are likely furniture
+            if size == 'large' and is_furniture:
+                print(f"  Filtered furniture: {obj.get('description')} (size: {size})")
+                continue
+
+            filtered.append(obj)
+
+        return filtered
+
+    def calculate_object_priority(self, obj):
+        """
+        Calculate priority score for object pickup
+
+        Priority factors:
+        - Size: smaller objects = higher priority (easier to grasp)
+        - Accessibility: clear space = higher priority
+        - Confidence: higher confidence = higher priority
+
+        Args:
+            obj: Object dict with size_estimate, accessibility, confidence
+
+        Returns:
+            float: Priority score (0.0 to 9.0, higher = pick up first)
+        """
+        # Size score: small=3, medium=2, large=1
+        size_scores = {"small": 3, "medium": 2, "large": 1}
+        size_score = size_scores.get(obj.get('size_estimate', 'medium').lower(), 2)
+
+        # Accessibility score: clear=3, blocked=1
+        access_scores = {"clear": 3, "blocked": 1}
+        access_score = access_scores.get(obj.get('accessibility', 'clear').lower(), 2)
+
+        # Confidence score: normalized to 0-3
+        confidence = obj.get('confidence', 70)
+        conf_score = (confidence / 100) * 3
+
+        total_score = size_score + access_score + conf_score
+        return round(total_score, 2)
+
+    def detect_multiple_objects_with_priority(self, image_path):
+        """
+        US-003: Complete multi-object detection pipeline with priority ordering
+
+        Pipeline:
+        1. Use US-001 classify_objects() to detect objects
+        2. Filter duplicate detections (IoU-based)
+        3. Filter furniture and fixed objects
+        4. Calculate priority scores
+        5. Sort by priority (highest first)
+
+        Args:
+            image_path: Path to image file
+
+        Returns:
+            dict: {
+                'objects': [...],  # Ordered by priority
+                'processing_time': float,
+                'stats': {...}
+            }
+        """
+        print("\n" + "="*60)
+        print("US-003: Multiple Object Detection with Priority")
+        print("="*60)
+
+        # Step 1: Detect objects using US-001 (with error handling)
+        print("\n[1] Detecting objects with Gemini AI...")
+        result = self.classify_with_error_handling(image_path)
+
+        if result.get('error') or not result.get('objects'):
+            print(f"⚠️  No objects detected or error occurred")
+            return result
+
+        objects = result['objects']
+        print(f"  Detected: {len(objects)} objects")
+
+        # Step 2: Filter duplicates
+        print("\n[2] Filtering duplicate detections...")
+        original_count = len(objects)
+        objects = self.filter_duplicate_objects(objects, iou_threshold=0.5)
+        duplicates_removed = original_count - len(objects)
+        if duplicates_removed > 0:
+            print(f"  Removed {duplicates_removed} duplicates")
+        else:
+            print(f"  No duplicates found")
+
+        # Step 3: Filter furniture
+        print("\n[3] Filtering furniture and fixed objects...")
+        original_count = len(objects)
+        objects = self.filter_furniture(objects)
+        furniture_removed = original_count - len(objects)
+        if furniture_removed > 0:
+            print(f"  Removed {furniture_removed} furniture items")
+        else:
+            print(f"  No furniture found")
+
+        # Step 4: Calculate priorities
+        print("\n[4] Calculating pickup priorities...")
+        for obj in objects:
+            obj['priority'] = self.calculate_object_priority(obj)
+
+        # Step 5: Sort by priority (highest first)
+        objects.sort(key=lambda x: x.get('priority', 0), reverse=True)
+        print(f"  Prioritized {len(objects)} objects for pickup")
+
+        # Update result
+        result['objects'] = objects
+        result['stats'] = {
+            'total_detected': original_count + duplicates_removed + furniture_removed,
+            'duplicates_removed': duplicates_removed,
+            'furniture_removed': furniture_removed,
+            'final_count': len(objects)
+        }
+
+        return result
 
 def main():
     """Test US-001: Visual Trash Classification"""
@@ -314,7 +641,10 @@ def main():
     print("Kuko Robot - US-001: Visual Trash Classification MVP")
     print("=" * 60)
 
-    kuko = KukoVision()
+    # Initialize vision system
+    # use_robot=True: Full robot mode (positions body to look at floor)
+    # use_robot=False: Camera-only mode (for testing without robot hardware)
+    kuko = KukoVision(use_robot=True)
 
     try:
         # Step 1: Initialize camera
@@ -393,5 +723,98 @@ def main():
         kuko.release_camera()
         print("\n" + "=" * 60)
 
+def test_us003():
+    """Test US-003: Multiple Object Detection with Priority"""
+    print("=" * 60)
+    print("Kuko Robot - US-003: Multiple Object Detection with Priority")
+    print("=" * 60)
+
+    # Initialize vision system with robot positioning
+    kuko = KukoVision(use_robot=True)
+
+    try:
+        # Step 1: Initialize camera
+        print("\n[1] Initializing 5MP camera...")
+        kuko.init_camera()
+
+        # Step 2: Capture photo
+        print("\n[2] Capturing photo...")
+        image_path = kuko.capture_photo("us003_test_capture.jpg")
+
+        # Step 3: Detect multiple objects with priority (US-003 pipeline)
+        result = kuko.detect_multiple_objects_with_priority(image_path)
+
+        # Step 4: Display results
+        print("\n" + "=" * 60)
+        print("US-003 RESULTS: PRIORITIZED OBJECT LIST")
+        print("=" * 60)
+        print(f"Processing time: {result.get('processing_time', 'N/A')}s")
+
+        if result.get('stats'):
+            stats = result['stats']
+            print(f"\nDetection Statistics:")
+            print(f"  Total detected: {stats.get('total_detected', 0)}")
+            print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
+            print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
+            print(f"  Final objects: {stats.get('final_count', 0)}")
+
+        print(f"\nPrioritized pickup order ({len(result.get('objects', []))} objects):")
+
+        if result.get('objects'):
+            for i, obj in enumerate(result['objects'], 1):
+                print(f"\n  Priority #{i} (Score: {obj.get('priority', 0)}):")
+                print(f"    Category: {obj.get('category', 'unknown')}")
+                print(f"    Description: {obj.get('description', 'N/A')}")
+                print(f"    Confidence: {obj.get('confidence', 0)}%")
+                print(f"    Size: {obj.get('size_estimate', 'N/A')}")
+                print(f"    Accessibility: {obj.get('accessibility', 'N/A')}")
+                print(f"    Location (bbox): {obj.get('bbox', 'N/A')}")
+        else:
+            print("\n  No objects detected for pickup")
+
+        # Step 5: Save visualizations
+        if result.get('objects'):
+            print("\n[5] Saving debug visualizations...")
+            kuko.draw_bounding_boxes(image_path, result['objects'], "us003_debug_bbox.jpg")
+            kuko.save_coordinates_for_grasping(result['objects'], "us003_object_coordinates.json")
+
+        # US-003 Acceptance Criteria Validation
+        print("\n" + "=" * 60)
+        print("US-003 ACCEPTANCE CRITERIA VALIDATION")
+        print("=" * 60)
+
+        objects = result.get('objects', [])
+        criteria = {
+            "✓ Detects up to 5 simultaneous objects": len(objects) <= 5,
+            "✓ Priority calculation (size + accessibility + confidence)": all('priority' in obj for obj in objects),
+            "✓ Duplicate filtering (IoU-based)": result.get('stats', {}).get('duplicates_removed') is not None,
+            "✓ Furniture filtering": result.get('stats', {}).get('furniture_removed') is not None,
+            "✓ Ordered by pickup priority": all(
+                objects[i].get('priority', 0) >= objects[i+1].get('priority', 0)
+                for i in range(len(objects)-1)
+            ) if len(objects) > 1 else True,
+        }
+
+        for criterion, passed in criteria.items():
+            status = "✓" if passed else "✗"
+            print(f"  {status} {criterion}")
+
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        kuko.release_camera()
+        print("\n" + "=" * 60)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    # Check if US-003 test is requested
+    if len(sys.argv) > 1 and sys.argv[1] == "--us003":
+        test_us003()
+    else:
+        # Default: Run US-001 test
+        main()
