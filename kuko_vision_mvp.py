@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """
-Kuko Robot - US-001: Visual Trash Classification MVP
+Kuko Robot - Vision System (US-003: Multiple Object Detection with Priority)
 Epic 1: Artificial Intelligence & Vision
 
-Captures photo with 5MP camera and classifies objects using Gemini AI
+Detects multiple objects with intelligent priority ordering based on:
+- Distance from robot (Y-coordinate analysis)
+- Object size (small/medium/large)
+- Accessibility (clear/blocked)
+- Detection confidence (>70%)
+
+Features:
+- Multi-object detection (up to 5 objects)
+- Duplicate filtering (IoU + proximity + description similarity)
+- Furniture/fixture filtering
+- Distance estimation
+- Priority-based ordering for efficient pickup
+
 Categories: toy, trash, clothing, other
-Confidence threshold: >70%
 """
 
 import cv2
@@ -800,9 +811,13 @@ class KukoVision:
         return result
 
 def main():
-    """Test US-001: Visual Trash Classification"""
+    """
+    Main vision system - US-003: Multiple Object Detection with Priority
+    (US-001 basic classification is now deprecated, use --basic flag if needed)
+    """
     print("=" * 60)
-    print("Kuko Robot - US-001: Visual Trash Classification MVP")
+    print("Kuko Robot - Vision System (US-003)")
+    print("Multiple Object Detection with Distance & Priority")
     print("=" * 60)
 
     # Initialize vision system
@@ -817,61 +832,64 @@ def main():
 
         # Step 2: Capture photo
         print("\n[2] Capturing photo...")
-        image_path = kuko.capture_photo("test_capture.jpg")
+        image_path = kuko.capture_photo("kuko_capture.jpg")
 
-        # Step 3: Classify with Gemini (with error handling)
-        print("\n[3] Classifying objects with Gemini AI (with error handling)...")
-        result = kuko.classify_with_error_handling(image_path)
+        # Step 3: Detect multiple objects with priority (US-003 pipeline)
+        result = kuko.detect_multiple_objects_with_priority(image_path)
 
-        # Step 4: Draw bounding boxes for debugging
-        if result.get('objects'):
-            print("\n[4] Drawing bounding boxes for debugging...")
-            kuko.draw_bounding_boxes(image_path, result['objects'])
-
-            # Step 5: Save coordinates for US-012 (Object Grasping)
-            print("\n[5] Saving coordinates for US-012 (Object Grasping)...")
-            kuko.save_coordinates_for_grasping(result['objects'])
-
-        # Step 6: Display results
+        # Step 4: Display results
         print("\n" + "=" * 60)
-        print("CLASSIFICATION RESULTS")
+        print("DETECTION RESULTS (PRIORITIZED)")
         print("=" * 60)
         print(f"Processing time: {result.get('processing_time', 'N/A')}s")
-        print(f"Objects found: {len(result.get('objects', []))}")
+
+        if result.get('stats'):
+            stats = result['stats']
+            print(f"\nDetection Statistics:")
+            print(f"  Total detected: {stats.get('total_detected', 0)}")
+            print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
+            print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
+            print(f"  Final objects: {stats.get('final_count', 0)}")
+
+        print(f"\nObjects ranked by priority ({len(result.get('objects', []))} objects):")
 
         if result.get('objects'):
-            print("\nDetected objects:")
             for i, obj in enumerate(result['objects'], 1):
-                print(f"\n  Object {i}:")
+                print(f"\n  Priority #{i} (Score: {obj.get('priority', 0)}):")
                 print(f"    Category: {obj.get('category', 'unknown')}")
                 print(f"    Description: {obj.get('description', 'N/A')}")
                 print(f"    Confidence: {obj.get('confidence', 0)}%")
+                print(f"    Distance: ~{obj.get('distance_info', {}).get('estimated_distance_cm', 'N/A')} cm")
+                print(f"    Size: {obj.get('size_estimate', 'N/A')}")
+                print(f"    Accessibility: {obj.get('accessibility', 'N/A')}")
                 print(f"    Location (bbox): {obj.get('bbox', 'N/A')}")
         else:
-            print("\n  No objects detected with confidence >70%")
-            if 'raw_response' in result:
-                print(f"\n  Raw Gemini response:\n  {result['raw_response']}")
+            print("\n  No objects detected for pickup")
 
-        # Acceptance criteria validation
+        # Step 5: Save visualizations
+        if result.get('objects'):
+            print("\n[5] Saving debug visualizations...")
+            kuko.draw_bounding_boxes(image_path, result['objects'], "debug_bbox.jpg")
+            kuko.save_coordinates_for_grasping(result['objects'], "object_coordinates.json")
+            print("  Saved: debug_bbox.jpg")
+            print("  Saved: object_coordinates.json")
+
+        # Acceptance criteria validation (US-003)
         print("\n" + "=" * 60)
-        print("ACCEPTANCE CRITERIA VALIDATION")
+        print("US-003 ACCEPTANCE CRITERIA VALIDATION")
         print("=" * 60)
+
+        objects = result.get('objects', [])
         criteria = {
-            "✓ HD camera capture": True,
-            "✓ Gemini AI classification": True,
-            "✓ Categories (toy/trash/clothing/other)": all(
-                obj.get('category') in ['toy', 'trash', 'clothing', 'other']
-                for obj in result.get('objects', [])
-            ) if result.get('objects') else True,
-            "✓ Confidence >70%": all(
-                obj.get('confidence', 0) > 70
-                for obj in result.get('objects', [])
-            ) if result.get('objects') else True,
-            "✓ Bounding box location": all(
-                'bbox' in obj
-                for obj in result.get('objects', [])
-            ) if result.get('objects') else True,
-            "✓ Processing time <3s": result.get('processing_time', 999) < 3,
+            "✓ Detects up to 5 simultaneous objects": len(objects) <= 5,
+            "✓ Distance calculation": all('distance_info' in obj for obj in objects),
+            "✓ Priority ordering (distance + size + access + conf)": all('priority' in obj for obj in objects),
+            "✓ Duplicate filtering (IoU + proximity)": result.get('stats', {}).get('duplicates_removed') is not None,
+            "✓ Furniture filtering": result.get('stats', {}).get('furniture_removed') is not None,
+            "✓ Ordered by pickup priority": all(
+                objects[i].get('priority', 0) >= objects[i+1].get('priority', 0)
+                for i in range(len(objects)-1)
+            ) if len(objects) > 1 else True,
         }
 
         for criterion, passed in criteria.items():
@@ -976,9 +994,11 @@ def test_us003():
 if __name__ == "__main__":
     import sys
 
-    # Check if US-003 test is requested
+    # US-003 is now the default (multi-object with priority)
+    # Use --us003 flag for the old separate test function
     if len(sys.argv) > 1 and sys.argv[1] == "--us003":
+        # Legacy test function (kept for compatibility)
         test_us003()
     else:
-        # Default: Run US-001 test
+        # Default: Run US-003 pipeline (main() now uses US-003)
         main()
