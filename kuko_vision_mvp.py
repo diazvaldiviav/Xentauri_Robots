@@ -140,6 +140,11 @@ class KukoVision:
             self.position_for_floor_scan(pitch_angle=-15, height=90)
 
         self.camera = cv2.VideoCapture(0)
+
+        # Check if camera opened successfully
+        if not self.camera.isOpened():
+            raise RuntimeError("Failed to open camera at index 0. Check camera connection and permissions.")
+
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 
@@ -147,6 +152,18 @@ class KukoVision:
         actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
         actual_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
         print(f"Camera initialized: {int(actual_width)}x{int(actual_height)}")
+
+        # Warm up camera (read and discard first frames)
+        ret = False
+        frame = None
+        for _ in range(3):
+            ret, frame = self.camera.read()
+            if ret:
+                break
+            time.sleep(0.1)
+
+        if not ret:
+            raise RuntimeError("Camera opened but cannot read frames. Check camera hardware.")
 
     def capture_photo(self, save_path="captured_image.jpg"):
         """Capture a photo from the 5MP camera"""
@@ -157,8 +174,23 @@ class KukoVision:
         if not ret:
             raise RuntimeError("Failed to capture image from camera")
 
-        # Save captured image
-        cv2.imwrite(save_path, frame)
+        # Validate frame
+        if frame is None or frame.size == 0:
+            raise RuntimeError("Captured frame is empty")
+
+        # Convert to absolute path
+        if not os.path.isabs(save_path):
+            save_path = os.path.abspath(save_path)
+
+        # Save captured image and verify success
+        success = cv2.imwrite(save_path, frame)
+        if not success:
+            raise RuntimeError(f"Failed to save image to {save_path}")
+
+        # Verify file exists
+        if not os.path.exists(save_path):
+            raise RuntimeError(f"Image file not found after save: {save_path}")
+
         print(f"Photo captured: {save_path}")
         return save_path
 
