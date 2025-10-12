@@ -216,27 +216,144 @@ sudo apt-get install flac mpg123
 
 ---
 
-### 📍 Current Position: Week 2 Priorities
+#### US-003: Multiple Object Detection (Week 2) - COMPLETE
+**Status:** ✅ Production Ready
+**Files:** `kuko_vision_mvp.py` (updated), `US-003_README.md`, `analyze_object_distance.py`
 
-**Next Story:** US-003 - Multiple Object Detection
+**Key Features:**
+- Multi-object detection (up to 5 objects per frame)
+- Priority-based ordering (distance + size + accessibility + confidence)
+- Duplicate filtering (IoU + spatial proximity + description similarity)
+- Furniture/fixture filtering (14 keywords)
+- Distance estimation from Y-coordinate analysis
+- Robot positioning (pitch +15° to look at floor)
+- Full HD capture (1920x1080) with 720p fallback
+
+**Priority Scoring (0-12 points):**
+```python
+priority = distance_score + size_score + access_score + confidence_score
+# Distance: closer = 0-3 points
+# Size: small=3, medium=2, large=1 points
+# Accessibility: clear=3, blocked=1 points
+# Confidence: 0-3 points (normalized)
+```
+
+**Integration:** Works with US-001 (base detection), outputs coordinates for US-012 (grasping)
 
 ---
 
-## US-003: Multiple Object Detection (Week 2) - NEXT
+### 📍 Current Position: Week 2 - Integration Complete
 
-**User Story:** As a user, I want Kuko to detect multiple objects in a single image, so that it can clean efficiently without scanning multiple times.
+**Milestone:** Integrated Voice + Vision + Movement System
 
-**Priority:** 🟡 HIGH (Week 2)
-**Effort:** 2 points
-**Epic:** EPIC 1 - Artificial Intelligence & Vision (SCRUM-5)
+---
 
-### Acceptance Criteria
+## Integrated System: Voice + Vision + Movement - COMPLETE
 
-- [ ] Detects up to 5 simultaneous objects in one frame
-- [ ] Prioritizes objects by: size + accessibility + confidence
-- [ ] Filters duplicate objects (same object seen from different angles)
-- [ ] Ignores furniture and fixed objects (sofas, tables, large plants)
-- [ ] Generates ordered list by pickup priority
+**Status:** ✅ Ready for Testing
+**Files:** `kuko_integrated_system.py`, `INTEGRATED_SYSTEM_README.md`
+
+### Overview
+
+Combines US-002 (Voice Commands) + US-003 (Multi-Object Detection) + Robot Movement into a fully autonomous floor scanning system.
+
+### Key Features
+
+1. **Voice-Activated Scanning**
+   - User: "Kuko, chequea a ver si hay algo en el piso"
+   - Kuko: "Estoy chequeando" (checking confirmation)
+   - Automated vision + movement pipeline
+
+2. **Intelligent 360° Search**
+   - Checks floor at current position first
+   - If no objects → performs 8-position scan (45° increments)
+   - Deduplicates objects seen from multiple angles
+   - Aggregates and prioritizes all findings
+
+3. **Bilingual Operation**
+   - Auto-detects Spanish/English from user command
+   - Responds in same language with native accent
+   - Reports object count, categories, distances
+
+4. **Autonomous Movement**
+   - XGO turn() API: -150 (right) to +150 (left)
+   - Configurable scan resolution (default: 8 positions)
+   - Automatic stabilization between captures
+   - Safety: slow pace for indoor navigation
+
+### Usage
+
+```bash
+# Run integrated system
+python kuko_integrated_system.py
+
+# Example commands:
+# 🇪🇸 "Kuko, chequea a ver si hay algo en el piso"
+# 🇪🇸 "Kuko, revisa el piso"
+# 🇬🇧 "Kuko, check if there's something on the floor"
+```
+
+### XGO Movement API
+
+```python
+# Rotation
+robot.turn(speed)   # -150 (right) to +150 (left)
+robot.stop()        # Stop movement
+
+# Configuration
+robot.pace('slow'/'normal'/'high')     # Speed
+robot.gait_type('trot'/'walk')         # Gait
+
+# Body positioning
+robot.attitude(['r', 'p', 'y'], [0, 15, 0])  # Pitch +15° = look down
+robot.translation(['x', 'y', 'z'], [0, 0, 90])  # Body height
+```
+
+### Pipeline
+
+```
+User Voice → Intent Recognition → Voice Confirmation
+    ↓
+Check floor at position 0
+    ↓
+Objects found? ─── Yes ──→ Report immediately
+    │
+    No
+    ↓
+360° scan (8 positions × 45°)
+    ↓
+Aggregate + deduplicate results
+    ↓
+Report: "Encontré X objetos" / "I found X objects"
+    ↓
+Save: debug_bbox.jpg, object_coordinates.json
+```
+
+### Testing Scenarios
+
+**Scenario 1:** Objects at current position
+- Detects immediately, no scan needed
+- Reports in priority order
+
+**Scenario 2:** Nothing at current position
+- Performs 360° scan automatically
+- Reports "El piso está limpio" if nothing found
+- Or aggregates all findings from 8 positions
+
+**Scenario 3:** Same object seen from multiple angles
+- Deduplication filters repeated detections
+- Keeps highest confidence instance
+
+---
+
+### 📍 Next Stories: Week 2 Completion
+
+**US-003 Acceptance Criteria:**
+- [x] Detects up to 5 simultaneous objects
+- [x] Priority ordering (distance + size + accessibility + confidence)
+- [x] Duplicate filtering (IoU + proximity + description)
+- [x] Furniture filtering
+- [x] Generates ordered pickup list
 
 ### Technical Approach
 
