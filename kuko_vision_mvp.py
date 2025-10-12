@@ -63,17 +63,21 @@ class KukoVision:
         else:
             print("ℹ️  Running in camera-only mode (no robot positioning)")
 
-    def position_for_floor_scan(self, pitch_angle=-15, height=90):
+    def position_for_floor_scan(self, pitch_angle=15, height=90):
         """
         Position robot to look at the floor for object detection
 
         This is CRITICAL for floor object detection. The robot must tilt
         its head/body downward to point the camera at the floor.
 
+        IMPORTANT: This robot's pitch convention is INVERTED:
+        - Positive pitch (+15°) = looks DOWN at floor
+        - Negative pitch (-15°) = looks UP at ceiling
+
         Args:
-            pitch_angle: Pitch angle in degrees (negative = look down)
+            pitch_angle: Pitch angle in degrees (positive = look down)
                         Range: -15 to +15 degrees
-                        Default: -15 (maximum downward tilt)
+                        Default: +15 (maximum downward tilt)
             height: Body height (z-axis translation)
                    Range: 75 (low) to 115 (high)
                    Default: 90 (neutral height)
@@ -87,10 +91,11 @@ class KukoVision:
 
         try:
             print(f"🤖 Positioning robot for floor scan...")
-            print(f"   Pitch: {pitch_angle}° (looking down)")
+            print(f"   Pitch: +{pitch_angle}° (looking down)")
             print(f"   Height: {height} mm")
 
-            # Set body attitude: roll=0, pitch=negative (look down), yaw=0
+            # Set body attitude: roll=0, pitch=positive (look down), yaw=0
+            # NOTE: This robot's pitch is inverted from typical convention
             self.robot.attitude(['r', 'p', 'y'], [0, pitch_angle, 0])
 
             # Set body height
@@ -137,19 +142,16 @@ class KukoVision:
         """Initialize 5MP camera"""
         # Position robot for floor scanning BEFORE opening camera
         if self.use_robot:
-            self.position_for_floor_scan(pitch_angle=-15, height=90)
+            self.position_for_floor_scan(pitch_angle=15, height=90)  # FIXED: +15° looks DOWN (robot-specific)
 
-        # Try to open camera with proper backend for Raspberry Pi
-        # CAP_V4L2 works better with Raspberry Pi Camera Module
-        self.camera = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        # For high resolution (5MP), use default backend (V4L2 times out)
+        # For low resolution (640x480), V4L2 works fine
+        print("Opening camera with default backend (V4L2 times out at 5MP)...")
+        self.camera = cv2.VideoCapture(0)
 
         # Check if camera opened successfully
         if not self.camera.isOpened():
-            print("⚠️  Failed with V4L2 backend, trying default backend...")
-            self.camera = cv2.VideoCapture(0)
-
-            if not self.camera.isOpened():
-                raise RuntimeError("Failed to open camera at index 0. Check camera connection and permissions.")
+            raise RuntimeError("Failed to open camera at index 0. Check camera connection and permissions.")
 
         # Set camera format to MJPEG (better compatibility with Raspberry Pi)
         self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
@@ -163,9 +165,10 @@ class KukoVision:
         print(f"Camera initialized: {actual_width}x{actual_height}")
 
         # Warm up camera (read and discard first frames)
+        # Default backend is more stable than V4L2 at high resolutions
         ret = False
         frame = None
-        for i in range(5):  # Increased to 5 attempts for Raspberry Pi
+        for i in range(3):  # 3 attempts should be enough with default backend
             ret, frame = self.camera.read()
             if ret and frame is not None:
                 # Validate frame shape
@@ -174,7 +177,7 @@ class KukoVision:
                     break
                 else:
                     print(f"⚠️  Attempt {i+1}: Invalid frame shape {frame.shape}, retrying...")
-            time.sleep(0.2)
+            time.sleep(0.5)  # Longer delay for 5MP frame capture
 
         if not ret or frame is None:
             raise RuntimeError("Camera opened but cannot read frames. Check camera hardware.")
