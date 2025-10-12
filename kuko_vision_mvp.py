@@ -58,7 +58,7 @@ class KukoVision:
             use_robot: If True, initializes XGO robot for body positioning
                       If False, only uses camera (for testing/simulation)
         """
-        self.model = genai.GenerativeModel('gemini-2.5-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
         self.camera = None
         self.robot = None
         self.use_robot = use_robot and ROBOT_AVAILABLE
