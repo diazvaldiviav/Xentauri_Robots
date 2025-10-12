@@ -259,10 +259,11 @@ class KukoVision:
         prompt = """
         Analyze this image and identify ONLY objects that are LOOSE on the floor and need to be picked up.
 
-        ⚠️ CRITICAL RULES:
-        1. ONLY detect objects that are DIRECTLY on the floor, scattered, or lying loose
-        2. IGNORE objects that are already organized or stored (in bags, boxes, containers, baskets)
-        3. IGNORE objects that are on shelves, in closets, or in designated storage areas
+        ⚠️ CRITICAL RULES - READ CAREFULLY:
+        1. ONLY detect objects that are LOOSE, SCATTERED, or FALLEN on the floor
+        2. DO NOT detect objects that belong there (dog beds, cushions, mats, rugs)
+        3. DO NOT detect bags, boxes, containers, baskets (these are storage, not loose items)
+        4. DO NOT detect furniture or fixtures (even if they look like clothing/fabric)
 
         For EACH loose object found on the floor, provide:
         1. category: Must be one of [toy, trash, clothing, other]
@@ -291,17 +292,22 @@ class KukoVision:
 
         If no loose objects found on the floor with confidence >70%, return empty objects array.
 
-        ❌ IGNORE - DO NOT DETECT:
-        - Objects IN bags, boxes, containers, baskets, bins (even if partially visible)
-        - Objects ON shelves, tables, beds, sofas (unless they clearly fell and are out of place)
+        ❌ IGNORE - DO NOT DETECT THESE:
+        - Bags, backpacks, purses (even if on floor - they are storage containers)
+        - Boxes, containers, baskets, bins (storage items, not loose objects)
+        - Dog beds, pet beds, pet cushions, pet mats (these belong on the floor)
+        - Floor cushions, floor pillows, meditation cushions (floor fixtures)
+        - Rugs, mats, carpets (floor coverings, belong there)
+        - Objects IN bags, boxes, containers (already stored)
+        - Objects ON shelves, tables, beds, sofas (in their place)
         - Clothing on hangers, in drawers, or folded/organized
-        - Clothing on people
+        - Clothing worn by people
         - Furniture (sofas, tables, chairs, beds, desks, cabinets)
         - Large appliances
         - Walls, floors, ceiling fixtures
-        - Large plants
+        - Large plants in pots
         - Decorative items in their proper place
-        - Storage containers themselves (bags, boxes, baskets)
+        - Storage containers of any kind
 
         ✅ DETECT - Objects that need pickup:
         - Toys scattered on the floor
@@ -648,20 +654,33 @@ class KukoVision:
         """
         furniture_keywords = ['sofa', 'couch', 'table', 'chair', 'bed', 'desk',
                              'shelf', 'cabinet', 'plant', 'lamp', 'tv',
-                             'appliance', 'furniture', 'wall', 'floor']
+                             'appliance', 'furniture', 'wall', 'floor',
+                             'dog bed', 'pet bed', 'cushion', 'pillow', 'mat', 'rug',
+                             'carpet', 'bag', 'backpack', 'purse', 'box']
 
         filtered = []
         for obj in objects:
             description = obj.get('description', '').lower()
             size = obj.get('size_estimate', '').lower()
 
-            # Check for furniture keywords
-            is_furniture = any(keyword in description for keyword in furniture_keywords)
+            # Check for furniture/fixture keywords
+            is_furniture_or_fixture = any(keyword in description for keyword in furniture_keywords)
 
-            # Large objects are likely furniture
-            if size == 'large' and is_furniture:
-                print(f"  Filtered furniture: {obj.get('description')} (size: {size})")
-                continue
+            if is_furniture_or_fixture:
+                # Filter if:
+                # 1. Large size (definitely furniture)
+                # 2. OR specific keywords (dog bed, bag, cushion, etc.) - regardless of size
+                if size == 'large':
+                    print(f"  Filtered furniture: {obj.get('description')} (size: {size})")
+                    continue
+                else:
+                    # Check if it's a specific fixture/storage item (should filter regardless of size)
+                    fixture_keywords = ['dog bed', 'pet bed', 'cushion', 'pillow', 'mat', 'rug',
+                                       'bag', 'backpack', 'purse', 'box']
+                    is_fixture = any(keyword in description for keyword in fixture_keywords)
+                    if is_fixture:
+                        print(f"  Filtered fixture/storage: {obj.get('description')}")
+                        continue
 
             filtered.append(obj)
 
@@ -684,10 +703,19 @@ class KukoVision:
         """
         # Storage/organization keywords to filter
         organized_keywords = [
+            # Storage containers
+            'bag', 'backpack', 'purse', 'handbag', 'tote',
+            'box', 'container', 'basket', 'bin',
+            # Location indicators
             'in bag', 'in box', 'in container', 'in basket', 'in bin',
             'on shelf', 'in drawer', 'on hanger', 'in closet',
-            'stored', 'organized', 'on table', 'on bed', 'on sofa',
-            'in storage', 'inside bag', 'inside box', 'inside container'
+            'on table', 'on bed', 'on sofa', 'on chair',
+            # Organization indicators
+            'stored', 'organized', 'in storage',
+            'inside bag', 'inside box', 'inside container',
+            # Pet/floor fixtures
+            'dog bed', 'pet bed', 'pet cushion', 'pet mat',
+            'floor cushion', 'floor pillow', 'floor mat'
         ]
 
         filtered = []
