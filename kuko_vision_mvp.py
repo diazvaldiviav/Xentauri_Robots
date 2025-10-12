@@ -379,13 +379,19 @@ class KukoVision:
                 center_x = (bbox[0] + bbox[2]) / 2
                 center_y = (bbox[1] + bbox[3]) / 2
 
+                # Calculate distance information
+                distance_info = self.calculate_distance_to_robot(obj)
+
                 grasp_data["objects"].append({
                     "id": i,
                     "category": obj.get('category'),
                     "description": obj.get('description'),
                     "confidence": obj.get('confidence'),
                     "bbox": bbox,
-                    "grasp_point": [center_x, center_y]
+                    "grasp_point": [center_x, center_y],
+                    "distance_cm": distance_info.get('estimated_distance_cm'),
+                    "distance_score": distance_info.get('distance_score'),
+                    "priority": obj.get('priority')
                 })
 
         with open(output_file, 'w') as f:
@@ -597,21 +603,66 @@ class KukoVision:
 
         return filtered
 
+    def calculate_distance_to_robot(self, obj, image_height=1080):
+        """
+        Calculate relative distance from robot to object
+
+        For a camera looking DOWN at the floor:
+        - Objects at top of image (low Y) = FAR from robot
+        - Objects at bottom of image (high Y) = CLOSE to robot
+
+        Args:
+            obj: Object dict with 'bbox' [x_min, y_min, x_max, y_max]
+            image_height: Image height in pixels (default 1080)
+
+        Returns:
+            dict: {
+                'distance_score': 0.0-1.0 (1.0 = closest, 0.0 = farthest),
+                'y_bottom': Bottom Y coordinate,
+                'estimated_distance_cm': Rough distance estimate in cm
+            }
+        """
+        if not obj.get('bbox'):
+            return {'distance_score': 0.0, 'y_bottom': 0, 'estimated_distance_cm': None}
+
+        bbox = obj['bbox']
+        y_bottom = bbox[3]  # y_max (bottom of bounding box)
+
+        # Distance score: normalize to 0-1 (higher Y = higher score = closer)
+        distance_score = y_bottom / image_height
+
+        # Rough distance estimation (camera-specific, needs calibration)
+        # For robot looking down at ~45-60cm height with 15° tilt:
+        # - Top of image (~y=0) ≈ 80cm away
+        # - Bottom of image (~y=1080) ≈ 20cm away
+        estimated_distance_cm = 80 - (distance_score * 60)  # Linear interpolation
+
+        return {
+            'distance_score': round(distance_score, 3),
+            'y_bottom': y_bottom,
+            'estimated_distance_cm': round(estimated_distance_cm, 1)
+        }
+
     def calculate_object_priority(self, obj):
         """
         Calculate priority score for object pickup
 
         Priority factors:
+        - Distance: closer objects = higher priority (easier to reach)
         - Size: smaller objects = higher priority (easier to grasp)
         - Accessibility: clear space = higher priority
         - Confidence: higher confidence = higher priority
 
         Args:
-            obj: Object dict with size_estimate, accessibility, confidence
+            obj: Object dict with size_estimate, accessibility, confidence, bbox
 
         Returns:
-            float: Priority score (0.0 to 9.0, higher = pick up first)
+            float: Priority score (0.0 to 12.0, higher = pick up first)
         """
+        # Distance score: closer = higher priority (0-3 points)
+        distance_info = self.calculate_distance_to_robot(obj)
+        distance_score = distance_info['distance_score'] * 3
+
         # Size score: small=3, medium=2, large=1
         size_scores = {"small": 3, "medium": 2, "large": 1}
         size_score = size_scores.get(obj.get('size_estimate', 'medium').lower(), 2)
@@ -624,7 +675,7 @@ class KukoVision:
         confidence = obj.get('confidence', 70)
         conf_score = (confidence / 100) * 3
 
-        total_score = size_score + access_score + conf_score
+        total_score = distance_score + size_score + access_score + conf_score
         return round(total_score, 2)
 
     def detect_multiple_objects_with_priority(self, image_path):
@@ -683,9 +734,14 @@ class KukoVision:
         else:
             print(f"  No furniture found")
 
-        # Step 4: Calculate priorities
-        print("\n[4] Calculating pickup priorities...")
+        # Step 4: Calculate distance and priorities
+        print("\n[4] Calculating distance and pickup priorities...")
         for obj in objects:
+            # Add distance information
+            distance_info = self.calculate_distance_to_robot(obj)
+            obj['distance_info'] = distance_info
+
+            # Calculate priority (now includes distance)
             obj['priority'] = self.calculate_object_priority(obj)
 
         # Step 5: Sort by priority (highest first)
