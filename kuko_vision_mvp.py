@@ -260,10 +260,12 @@ class KukoVision:
         Analyze this image and identify ONLY objects that are LOOSE on the floor and need to be picked up.
 
         ⚠️ CRITICAL RULES - READ CAREFULLY:
-        1. ONLY detect objects that are LOOSE, SCATTERED, or FALLEN on the floor
-        2. DO NOT detect objects that belong there (dog beds, cushions, mats, rugs)
-        3. DO NOT detect bags, boxes, containers, baskets (these are storage, not loose items)
-        4. DO NOT detect furniture or fixtures (even if they look like clothing/fabric)
+        1. ONLY detect 3D objects that are LOOSE, SCATTERED, or FALLEN on the floor
+        2. DO NOT detect floor patterns, floor textures, shadows, reflections, or light spots
+        3. DO NOT detect objects that belong there (dog beds, cushions, mats, rugs)
+        4. DO NOT detect bags, boxes, containers, baskets (storage items)
+        5. DO NOT detect furniture or fixtures (even if they look like clothing/fabric)
+        6. Objects must have clear 3D shape and be distinguishable from the floor surface
 
         For EACH loose object found on the floor, provide:
         1. category: Must be one of [toy, trash, clothing, other]
@@ -293,20 +295,25 @@ class KukoVision:
         If no loose objects found on the floor with confidence >70%, return empty objects array.
 
         ❌ IGNORE - DO NOT DETECT THESE:
-        - Bags, backpacks, purses (even if on floor - they are storage containers)
-        - Boxes, containers, baskets, bins (storage items, not loose objects)
-        - Dog beds, pet beds, pet cushions, pet mats (these belong on the floor)
-        - Floor cushions, floor pillows, meditation cushions (floor fixtures)
-        - Rugs, mats, carpets (floor coverings, belong there)
+        - Floor itself (terrazzo, tile, wood, concrete patterns)
+        - Floor textures, spots, stains, discoloration on the floor
+        - Shadows, reflections, light spots, glares on the floor
+        - Dirt, dust, or natural floor wear (not objects)
+        - LED strips, baseboards, floor trim (permanent fixtures)
+        - Bags, backpacks, purses (storage containers, even on floor)
+        - Boxes, containers, baskets, bins (storage items)
+        - Dog beds, pet beds, pet cushions, pet mats (floor fixtures)
+        - Floor cushions, floor pillows, meditation cushions (fixtures)
+        - Rugs, mats, carpets (floor coverings)
         - Objects IN bags, boxes, containers (already stored)
-        - Objects ON shelves, tables, beds, sofas (in their place)
+        - Objects ON shelves, tables, beds, sofas (in place)
         - Clothing on hangers, in drawers, or folded/organized
         - Clothing worn by people
         - Furniture (sofas, tables, chairs, beds, desks, cabinets)
         - Large appliances
         - Walls, floors, ceiling fixtures
         - Large plants in pots
-        - Decorative items in their proper place
+        - Decorative items in proper place
         - Storage containers of any kind
 
         ✅ DETECT - Objects that need pickup:
@@ -733,6 +740,45 @@ class KukoVision:
 
         return filtered
 
+    def filter_tiny_detections(self, objects, min_width=50, min_height=50, min_area=2500):
+        """
+        Filter out very small bounding boxes (likely false positives)
+
+        Small detections are usually:
+        - Floor patterns/textures
+        - Shadows or light reflections
+        - Noise in the image
+        - Spots or stains on the floor
+
+        Args:
+            objects: List of detected objects
+            min_width: Minimum bbox width in pixels (default: 50px)
+            min_height: Minimum bbox height in pixels (default: 50px)
+            min_area: Minimum bbox area in square pixels (default: 2500px = 50x50)
+
+        Returns:
+            List of objects with reasonable size
+        """
+        filtered = []
+        for obj in objects:
+            if not obj.get('bbox'):
+                filtered.append(obj)
+                continue
+
+            bbox = obj['bbox']
+            width = bbox[2] - bbox[0]
+            height = bbox[3] - bbox[1]
+            area = width * height
+
+            # Filter if too small
+            if width < min_width or height < min_height or area < min_area:
+                print(f"  Filtered tiny detection: {obj.get('description')} (size: {width}x{height}px, likely floor pattern/noise)")
+                continue
+
+            filtered.append(obj)
+
+        return filtered
+
     def calculate_distance_to_robot(self, obj, image_height=1080):
         """
         Calculate relative distance from robot to object
@@ -875,8 +921,18 @@ class KukoVision:
         else:
             print(f"  No organized items found")
 
-        # Step 5: Calculate distance and priorities
-        print("\n[5] Calculating distance and pickup priorities...")
+        # Step 5: Filter tiny detections (floor patterns, noise)
+        print("\n[5] Filtering tiny detections (floor patterns/noise)...")
+        original_count = len(objects)
+        objects = self.filter_tiny_detections(objects, min_width=50, min_height=50)
+        tiny_removed = original_count - len(objects)
+        if tiny_removed > 0:
+            print(f"  Removed {tiny_removed} tiny detections (likely floor patterns/shadows)")
+        else:
+            print(f"  No tiny detections found")
+
+        # Step 6: Calculate distance and priorities
+        print("\n[6] Calculating distance and pickup priorities...")
         for obj in objects:
             # Add distance information
             distance_info = self.calculate_distance_to_robot(obj)
@@ -885,17 +941,18 @@ class KukoVision:
             # Calculate priority (now includes distance)
             obj['priority'] = self.calculate_object_priority(obj)
 
-        # Step 5: Sort by priority (highest first)
+        # Step 7: Sort by priority (highest first)
         objects.sort(key=lambda x: x.get('priority', 0), reverse=True)
         print(f"  Prioritized {len(objects)} objects for pickup")
 
         # Update result
         result['objects'] = objects
         result['stats'] = {
-            'total_detected': len(result.get('objects', [])) + duplicates_removed + furniture_removed + organized_removed,
+            'total_detected': len(result.get('objects', [])) + duplicates_removed + furniture_removed + organized_removed + tiny_removed,
             'duplicates_removed': duplicates_removed,
             'furniture_removed': furniture_removed,
             'organized_removed': organized_removed,
+            'tiny_removed': tiny_removed,
             'final_count': len(objects)
         }
 
@@ -941,6 +998,7 @@ def main():
             print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
             print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
             print(f"  Organized items removed: {stats.get('organized_removed', 0)}")
+            print(f"  Tiny detections removed: {stats.get('tiny_removed', 0)}")
             print(f"  Final objects: {stats.get('final_count', 0)}")
 
         print(f"\nObjects ranked by priority ({len(result.get('objects', []))} objects):")
@@ -979,6 +1037,7 @@ def main():
             "✓ Duplicate filtering (IoU + proximity)": result.get('stats', {}).get('duplicates_removed') is not None,
             "✓ Furniture filtering": result.get('stats', {}).get('furniture_removed') is not None,
             "✓ Organized objects filtering (bags/boxes)": result.get('stats', {}).get('organized_removed') is not None,
+            "✓ Tiny detection filtering (floor patterns)": result.get('stats', {}).get('tiny_removed') is not None,
             "✓ Ordered by pickup priority": all(
                 objects[i].get('priority', 0) >= objects[i+1].get('priority', 0)
                 for i in range(len(objects)-1)
@@ -1032,6 +1091,7 @@ def test_us003():
             print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
             print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
             print(f"  Organized items removed: {stats.get('organized_removed', 0)}")
+            print(f"  Tiny detections removed: {stats.get('tiny_removed', 0)}")
             print(f"  Final objects: {stats.get('final_count', 0)}")
 
         print(f"\nPrioritized pickup order ({len(result.get('objects', []))} objects):")
