@@ -257,11 +257,16 @@ class KukoVision:
 
         # Gemini prompt for object classification (US-001 + US-003 enhanced)
         prompt = """
-        Analyze this image and identify ALL objects that are out of place (toys, trash, clothing, etc.).
+        Analyze this image and identify ONLY objects that are LOOSE on the floor and need to be picked up.
 
-        For EACH object found, provide:
+        ⚠️ CRITICAL RULES:
+        1. ONLY detect objects that are DIRECTLY on the floor, scattered, or lying loose
+        2. IGNORE objects that are already organized or stored (in bags, boxes, containers, baskets)
+        3. IGNORE objects that are on shelves, in closets, or in designated storage areas
+
+        For EACH loose object found on the floor, provide:
         1. category: Must be one of [toy, trash, clothing, other]
-        2. description: Brief description of the object
+        2. description: Brief description of the object (DO NOT mention "in bag", "in box", "in container")
         3. confidence: Confidence percentage (0-100)
         4. bbox: Approximate bounding box as [x_min, y_min, x_max, y_max] in pixels
         5. size_estimate: "small" (<20cm), "medium" (20-50cm), "large" (>50cm)
@@ -284,16 +289,25 @@ class KukoVision:
             ]
         }
 
-        If no objects found with confidence >70%, return empty objects array.
+        If no loose objects found on the floor with confidence >70%, return empty objects array.
 
-        Important: Detect only objects on the floor or surfaces that are out of place.
-        IGNORE:
-        - Clothing on hangers or shelves
+        ❌ IGNORE - DO NOT DETECT:
+        - Objects IN bags, boxes, containers, baskets, bins (even if partially visible)
+        - Objects ON shelves, tables, beds, sofas (unless they clearly fell and are out of place)
+        - Clothing on hangers, in drawers, or folded/organized
         - Clothing on people
-        - Furniture (sofas, tables, chairs, beds)
+        - Furniture (sofas, tables, chairs, beds, desks, cabinets)
         - Large appliances
         - Walls, floors, ceiling fixtures
         - Large plants
+        - Decorative items in their proper place
+        - Storage containers themselves (bags, boxes, baskets)
+
+        ✅ DETECT - Objects that need pickup:
+        - Toys scattered on the floor
+        - Trash lying on the floor
+        - Clothing dropped on the floor
+        - Small objects fallen on the floor
         """
 
         # Send to Gemini
@@ -653,6 +667,44 @@ class KukoVision:
 
         return filtered
 
+    def filter_organized_objects(self, objects):
+        """
+        Filter out objects that are already organized or stored
+
+        Organized indicators:
+        - Keywords indicating storage: "in bag", "in box", "in container", "in basket"
+        - Keywords: "on shelf", "in drawer", "on hanger"
+        - Any description suggesting object is already in proper place
+
+        Args:
+            objects: List of detected objects
+
+        Returns:
+            List of objects that are loose on the floor (need pickup)
+        """
+        # Storage/organization keywords to filter
+        organized_keywords = [
+            'in bag', 'in box', 'in container', 'in basket', 'in bin',
+            'on shelf', 'in drawer', 'on hanger', 'in closet',
+            'stored', 'organized', 'on table', 'on bed', 'on sofa',
+            'in storage', 'inside bag', 'inside box', 'inside container'
+        ]
+
+        filtered = []
+        for obj in objects:
+            description = obj.get('description', '').lower()
+
+            # Check if description mentions organization/storage
+            is_organized = any(keyword in description for keyword in organized_keywords)
+
+            if is_organized:
+                print(f"  Filtered organized object: {obj.get('description')} (already in proper place)")
+                continue
+
+            filtered.append(obj)
+
+        return filtered
+
     def calculate_distance_to_robot(self, obj, image_height=1080):
         """
         Calculate relative distance from robot to object
@@ -785,8 +837,18 @@ class KukoVision:
         else:
             print(f"  No furniture found")
 
-        # Step 4: Calculate distance and priorities
-        print("\n[4] Calculating distance and pickup priorities...")
+        # Step 4: Filter organized objects (in bags, boxes, containers)
+        print("\n[4] Filtering objects already in proper place...")
+        original_count = len(objects)
+        objects = self.filter_organized_objects(objects)
+        organized_removed = original_count - len(objects)
+        if organized_removed > 0:
+            print(f"  Removed {organized_removed} organized items (in bags/boxes/containers)")
+        else:
+            print(f"  No organized items found")
+
+        # Step 5: Calculate distance and priorities
+        print("\n[5] Calculating distance and pickup priorities...")
         for obj in objects:
             # Add distance information
             distance_info = self.calculate_distance_to_robot(obj)
@@ -802,9 +864,10 @@ class KukoVision:
         # Update result
         result['objects'] = objects
         result['stats'] = {
-            'total_detected': original_count + duplicates_removed + furniture_removed,
+            'total_detected': len(result.get('objects', [])) + duplicates_removed + furniture_removed + organized_removed,
             'duplicates_removed': duplicates_removed,
             'furniture_removed': furniture_removed,
+            'organized_removed': organized_removed,
             'final_count': len(objects)
         }
 
@@ -849,6 +912,7 @@ def main():
             print(f"  Total detected: {stats.get('total_detected', 0)}")
             print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
             print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
+            print(f"  Organized items removed: {stats.get('organized_removed', 0)}")
             print(f"  Final objects: {stats.get('final_count', 0)}")
 
         print(f"\nObjects ranked by priority ({len(result.get('objects', []))} objects):")
@@ -886,6 +950,7 @@ def main():
             "✓ Priority ordering (distance + size + access + conf)": all('priority' in obj for obj in objects),
             "✓ Duplicate filtering (IoU + proximity)": result.get('stats', {}).get('duplicates_removed') is not None,
             "✓ Furniture filtering": result.get('stats', {}).get('furniture_removed') is not None,
+            "✓ Organized objects filtering (bags/boxes)": result.get('stats', {}).get('organized_removed') is not None,
             "✓ Ordered by pickup priority": all(
                 objects[i].get('priority', 0) >= objects[i+1].get('priority', 0)
                 for i in range(len(objects)-1)
@@ -938,6 +1003,7 @@ def test_us003():
             print(f"  Total detected: {stats.get('total_detected', 0)}")
             print(f"  Duplicates removed: {stats.get('duplicates_removed', 0)}")
             print(f"  Furniture removed: {stats.get('furniture_removed', 0)}")
+            print(f"  Organized items removed: {stats.get('organized_removed', 0)}")
             print(f"  Final objects: {stats.get('final_count', 0)}")
 
         print(f"\nPrioritized pickup order ({len(result.get('objects', []))} objects):")
@@ -971,6 +1037,7 @@ def test_us003():
             "✓ Priority calculation (size + accessibility + confidence)": all('priority' in obj for obj in objects),
             "✓ Duplicate filtering (IoU-based)": result.get('stats', {}).get('duplicates_removed') is not None,
             "✓ Furniture filtering": result.get('stats', {}).get('furniture_removed') is not None,
+            "✓ Organized objects filtering (bags/boxes)": result.get('stats', {}).get('organized_removed') is not None,
             "✓ Ordered by pickup priority": all(
                 objects[i].get('priority', 0) >= objects[i+1].get('priority', 0)
                 for i in range(len(objects)-1)
