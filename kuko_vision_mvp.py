@@ -528,13 +528,34 @@ class KukoVision:
 
         return intersection / union if union > 0 else 0
 
-    def filter_duplicate_objects(self, objects, iou_threshold=0.5):
+    def calculate_bbox_center_distance(self, bbox1, bbox2):
         """
-        Filter duplicate object detections based on bounding box overlap
+        Calculate distance between centers of two bounding boxes
+
+        Args:
+            bbox1, bbox2: [x_min, y_min, x_max, y_max]
+
+        Returns:
+            float: Euclidean distance between centers
+        """
+        # Calculate centers
+        center1_x = (bbox1[0] + bbox1[2]) / 2
+        center1_y = (bbox1[1] + bbox1[3]) / 2
+        center2_x = (bbox2[0] + bbox2[2]) / 2
+        center2_y = (bbox2[1] + bbox2[3]) / 2
+
+        # Euclidean distance
+        distance = ((center1_x - center2_x)**2 + (center1_y - center2_y)**2)**0.5
+        return distance
+
+    def filter_duplicate_objects(self, objects, iou_threshold=0.5, proximity_threshold=150):
+        """
+        Filter duplicate object detections based on bounding box overlap and proximity
 
         Args:
             objects: List of detected objects with 'bbox' and 'confidence'
             iou_threshold: IoU threshold for considering duplicates (default: 0.5)
+            proximity_threshold: Max distance between centers (pixels) to check for duplicates
 
         Returns:
             List of filtered objects (keeps highest confidence)
@@ -557,11 +578,29 @@ class KukoVision:
                 if not existing.get('bbox'):
                     continue
 
+                # Check IoU overlap
                 iou = self.calculate_bbox_iou(obj['bbox'], existing['bbox'])
                 if iou > iou_threshold:
                     is_duplicate = True
                     print(f"  Filtered duplicate: {obj.get('description')} (IoU: {iou:.2f} with {existing.get('description')})")
                     break
+
+                # Check spatial proximity (for objects that are close but low IoU)
+                center_distance = self.calculate_bbox_center_distance(obj['bbox'], existing['bbox'])
+                if center_distance < proximity_threshold:
+                    # If centers are very close, check if descriptions are similar
+                    obj_desc = obj.get('description', '').lower()
+                    exist_desc = existing.get('description', '').lower()
+
+                    # Simple similarity check (shared keywords)
+                    obj_words = set(obj_desc.split())
+                    exist_words = set(exist_desc.split())
+                    shared_words = obj_words.intersection(exist_words)
+
+                    if len(shared_words) >= 2:  # At least 2 common words
+                        is_duplicate = True
+                        print(f"  Filtered close proximity: {obj.get('description')} (distance: {center_distance:.0f}px, similar to {existing.get('description')})")
+                        break
 
             if not is_duplicate:
                 filtered.append(obj)
@@ -717,7 +756,8 @@ class KukoVision:
         # Step 2: Filter duplicates
         print("\n[2] Filtering duplicate detections...")
         original_count = len(objects)
-        objects = self.filter_duplicate_objects(objects, iou_threshold=0.5)
+        # Lower threshold = more aggressive filtering (0.3 instead of 0.5)
+        objects = self.filter_duplicate_objects(objects, iou_threshold=0.3)
         duplicates_removed = original_count - len(objects)
         if duplicates_removed > 0:
             print(f"  Removed {duplicates_removed} duplicates")
